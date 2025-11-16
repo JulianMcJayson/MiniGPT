@@ -19,11 +19,9 @@ class Tensor():
     '''A simple Tensor class for automatic differentiation.'''
     def __init__(self, value : np.ndarray, children=()):
         self.value = value
-        self.grad = np.zeros_like(self.value)
+        self.grad = np.zeros_like(value)
         self._prev = set(children)
         self._backward = lambda: None
-        self.gain = Tensor(np.array(1))
-        self.bias = Tensor(np.array(0))
 
     def backward(self):
         '''a backward chainrule collecting the gradient of actions were made.'''
@@ -52,8 +50,22 @@ class Tensor():
         out = Tensor(self.value + other.value, (self, other))
 
         def _backward():
-            self.grad += out.grad
-            other.grad += out.grad
+            grad_self = out.grad
+            while len(grad_self.shape) > len(self.value.shape):
+                grad_self = grad_self.sum(axis=0)
+            for i, dim in enumerate(self.value.shape):
+                if dim == 1:
+                    grad_self = grad_self.sum(axis=i, keepdims=True)
+            self.grad += grad_self
+
+            grad_other = out.grad
+            while len(grad_other.shape) > len(other.value.shape):
+                grad_other = grad_other.sum(axis=0)
+            for i, dim in enumerate(other.value.shape):
+                if dim == 1:
+                    grad_other = grad_other.sum(axis=i, keepdims=True)
+            other.grad += grad_other
+            
         out._backward = _backward
 
         return out
@@ -82,8 +94,22 @@ class Tensor():
     def __truediv__(self, other):
         out = Tensor(self.value / other.value, (self, other))
         def _backward():
-            self.grad += (1 / other.value) * out.grad
-            other.grad += (-self.value / (other.value **2)) * out.grad
+
+            grad_self = (1 / other.value) * out.grad
+            while len(grad_self.shape) > len(self.value.shape):
+                grad_self = grad_self.sum(axis=0)
+            for i, dim in enumerate(self.value.shape):
+                if dim == 1:
+                    grad_self = grad_self.sum(axis=i, keepdims=True)
+            self.grad += grad_self
+
+            grad_other = (-self.value / (other.value **2)) * out.grad
+            while len(grad_other.shape) > len(other.value.shape):
+                grad_other = grad_other.sum(axis=0)
+            for i, dim in enumerate(other.value.shape):
+                if dim == 1:
+                    grad_other = grad_other.sum(axis=i, keepdims=True)
+            other.grad += grad_other
         out._backward = _backward
         return out
     
@@ -92,8 +118,22 @@ class Tensor():
         out = Tensor(self.value @ other.value, (self, other))
 
         def _backward():
-            self.grad += out.grad @ other.value.T
-            other.grad += self.value.T @ out.grad
+            # B, L, K = self.value.shape
+            # M = out.grad.shape[-1]
+            # X_reshaped = self.value.reshape(B * L, K) # (80, 128)
+            # dY_reshaped = out.grad.reshape(B * L, M) # (80, 512)
+            # dW = X_reshaped.T @ dY_reshaped # (128, 80) @ (80, 512) -> (128, 512)
+            # grad_for_other = dW
+            if self.value.ndim > 2 and other.value.ndim == 2:
+                grad_self = np.einsum('blm, km -> blk', out.grad, other.value)
+                grad_other = np.einsum('blk, blm -> km', self.value, out.grad)
+            elif self.value.ndim == other.value.ndim and self.value.ndim > 2:
+                grad_self = np.einsum('bhlm, bhkm -> bhlk', out.grad, other.value)
+                grad_other = np.einsum('bhlk, bhlm -> bhkm', self.value, out.grad)
+            else:
+                raise NotImplementedError(f"Matmul backward for ndim {self.value.ndim} @ {other.value.ndim} is not implemented.")
+            self.grad += grad_self
+            other.grad += grad_other
         out._backward = _backward
 
         return out
@@ -133,8 +173,12 @@ class Tensor():
         return out
     
     def softmax(self):
-        exp_value = self.exp()
-        out = Tensor(exp_value.value / np.sum(exp_value.value, axis=-1, keepdims=True), (self,))
+        max_val = np.max(self.value, axis=-1, keepdims=True)
+        stable_val = self.value - max_val
+        exp_value = np.exp(stable_val)
+        sum_exp =np.sum(exp_value, axis=-1, keepdims=True)
+        out_val = exp_value /(sum_exp + 1e-9)
+        out = Tensor(out_val, (self,))
         
         def _backward():
             self.grad += (out.value * out.grad) - out.value * np.sum(out.value * out.grad, axis=-1, keepdims=True)
@@ -192,9 +236,7 @@ class Tensor():
     def __repr__(self):
         return f"Tensor(value={self.value}, grad={self.grad})"
 
-    def layerNorm(self, eps=1e-5):
-        g = self.gain
-        b = self.bias
+    def layerNorm(self, g : Tensor, b: Tensor, eps=1e-5):
         a = self.value
         H = a.shape[-1]
         mu = np.mean(a, axis=-1, keepdims=True)
@@ -215,5 +257,15 @@ class Tensor():
             d_mu = np.sum(d_anorm * (-1/sigma), axis=-1, keepdims=True) + d_var * np.sum(-2 * (a - mu), axis=-1, keepdims=True) / H
             da = (d_anorm / sigma) + (d_var * 2 * (a - mu) / H) + (d_mu / H)
             self.grad += da
+        out._backward = _backward
+        return out
+    def cross_entropy(self, Y_true):
+        epsilon = 1e-9
+        loss_val = -np.sum(Y_true.value * np.log(self.value + epsilon))
+        out = Tensor(np.array(loss_val), (self, Y_true)) 
+
+        def _backward():
+            self.grad += -Y_true.value / (self.value + epsilon)
+            
         out._backward = _backward
         return out

@@ -29,9 +29,16 @@ class MiniGPT():
         self.wK = Tensor(np.random.rand(dmodel,  numheads * dk))
         self.wV = Tensor(np.random.rand(dmodel,  numheads * dv))
         self.wO = Tensor(np.random.rand(numheads * dv, dmodel))
+        self.gainlr1 = Tensor(np.ones((1, 1, dmodel)))
+        self.biaslr1 = Tensor(np.zeros((1, 1, dmodel)))
+        self.gainlr2 = Tensor(np.ones((1, 1, dmodel)))
+        self.biaslr2 = Tensor(np.zeros((1, 1, dmodel)))
         self.dk = dk
         self.dv = dv
         self.dq = dmodel // numheads
+    
+    def get_param(self):
+        return [self.w1, self.w2, self.b1, self.b2, self.wQ, self.wK, self.wV, self.wO]
     
     def _split_head(self, X : Tensor):
         B, L, _ = X.value.shape
@@ -57,10 +64,10 @@ class MiniGPT():
         heads : Tensor = (Q_split @ K_split.transpose((0, 1, 3, 2)) / np.sqrt(self.dk)).softmax() @ V_split
         attention_output =  self._reshape_head(heads) @ self.wO
         attention_output_R = attention_output + X_c
-        norm_layer = attention_output_R.layerNorm()
+        norm_layer = attention_output_R.layerNorm(self.gainlr1, self.biaslr1)
         ffn_out = self.FFN(norm_layer)
         ffn_out_R = ffn_out + norm_layer
-        return ffn_out_R.layerNorm()
+        return ffn_out_R.layerNorm(self.gainlr1, self.biaslr2)
     
     def FFN(self, X : Tensor):
         relu = ((X @ self.w1) + self.b1).relu()
