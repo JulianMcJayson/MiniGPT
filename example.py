@@ -1,3 +1,18 @@
+# ###
+# Training Model
+# init model
+# get params from model
+# init optimizer with params
+# fake data (optional)
+# training epoch
+# zero grad at optimizer
+# predicts
+# softmax model on top
+# create loss with answer
+# backward the loss
+# step the optimizer
+# ###
+
 from transformer.model import MiniGPT
 from torch.tensor import Tensor
 from optimizer.adam import Adam
