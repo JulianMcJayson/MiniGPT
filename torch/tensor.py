@@ -1,3 +1,12 @@
+# ###
+# Tensor Autograd
+# calculate grad and assign backward function. Ref to diff and chain rule.
+# calculate layer normalization
+# h = f(g/sigma*(a - mu) + b)
+# mu = 1/H * sum of a
+# sigma = sqrt(1/H * sum of (a - mu)**2)
+# ###
+
 import numpy as np
 
 def is_tensor(func):
