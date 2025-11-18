@@ -259,13 +259,28 @@ class Tensor():
             self.grad += da
         out._backward = _backward
         return out
-    def cross_entropy(self, Y_true):
+    def cross_entropy(self, Y_true : Tensor):
         epsilon = 1e-9
-        loss_val = -np.sum(Y_true.value * np.log(self.value + epsilon))
+        B_dim, L_dim, V_dim = self.value.shape
+        N = B_dim * L_dim
+        propbs_flat = self.value.reshape(N, V_dim)
+        targets_flat = Y_true.value.reshape(N).astype(int)
+        correct_props = propbs_flat[np.arange(N), targets_flat]
+        loss_val = -np.sum(np.log(correct_props + epsilon))
         out = Tensor(np.array(loss_val), (self, Y_true)) 
 
         def _backward():
-            self.grad += -Y_true.value / (self.value + epsilon)
+            grad_self_flat = np.zeros_like(propbs_flat)
+            grad_self_flat[np.arange(N), targets_flat] = -1.0 / (correct_props + epsilon)
+            self.grad += grad_self_flat.reshape(self.value.shape)
             
+        out._backward = _backward
+        return out
+    def lookup(self, indices : Tensor):
+        out = Tensor(self.value[indices.value], (self, indices))
+        def _backward():
+            grad_we = np.zeros_like(self.value)
+            np.add.at(grad_we, indices.value, out.grad)
+            self.grad += grad_we
         out._backward = _backward
         return out

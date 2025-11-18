@@ -18,27 +18,30 @@ class MiniGPT():
     """A simplified implementation of a GPT-like transformer model.
     Decoding-Only Transformer
     """
-    def __init__(self, dmodel : int, numheads : int, dk : int, dv : int, dff : int) -> None:
+    def __init__(self,vocab_size :int, dmodel : int, numheads : int, dk : int, dv : int, dff : int) -> None:
         self.numheads = numheads
         self.dmodel = dmodel
-        self.w1 = Tensor(np.random.rand(self.dmodel, dff))
-        self.w2 = Tensor(np.random.rand(dff, self.dmodel))
-        self.b1 = Tensor(np.random.rand(1, dff))
-        self.b2 = Tensor(np.random.rand(1, self.dmodel))
-        self.wQ = Tensor(np.random.rand(dmodel,  numheads * dk))
-        self.wK = Tensor(np.random.rand(dmodel,  numheads * dk))
-        self.wV = Tensor(np.random.rand(dmodel,  numheads * dv))
-        self.wO = Tensor(np.random.rand(numheads * dv, dmodel))
-        self.gainlr1 = Tensor(np.ones((1, 1, dmodel)))
-        self.biaslr1 = Tensor(np.zeros((1, 1, dmodel)))
-        self.gainlr2 = Tensor(np.ones((1, 1, dmodel)))
-        self.biaslr2 = Tensor(np.zeros((1, 1, dmodel)))
+        self.vocab_size = vocab_size
+        self.wE = Tensor(np.random.rand(vocab_size, dmodel) * 0.02)
+        self.w1 = Tensor(np.random.rand(self.dmodel, dff) * 0.02)
+        self.w2 = Tensor(np.random.rand(dff, self.dmodel) * 0.02)
+        self.b1 = Tensor(np.random.rand(1, dff) * 0.02)
+        self.b2 = Tensor(np.random.rand(1, self.dmodel) * 0.02)
+        self.wQ = Tensor(np.random.rand(dmodel,  numheads * dk) * 0.02)
+        self.wK = Tensor(np.random.rand(dmodel,  numheads * dk) * 0.02)
+        self.wV = Tensor(np.random.rand(dmodel,  numheads * dv) * 0.02)
+        self.wO = Tensor(np.random.rand(numheads * dv, dmodel) * 0.02)
+        self.gainlr1 = Tensor(np.ones((1, 1, dmodel)) * 0.02)
+        self.biaslr1 = Tensor(np.zeros((1, 1, dmodel)) * 0.02)
+        self.gainlr2 = Tensor(np.ones((1, 1, dmodel)) * 0.02)
+        self.biaslr2 = Tensor(np.zeros((1, 1, dmodel)) * 0.02)
+        self.w_final = Tensor(np.random.rand(dmodel, vocab_size) * 0.02)
         self.dk = dk
         self.dv = dv
         self.dq = dmodel // numheads
     
     def get_param(self):
-        return [self.w1, self.w2, self.b1, self.b2, self.wQ, self.wK, self.wV, self.wO]
+        return [self.wE, self.w1, self.w2, self.b1, self.b2, self.wQ, self.wK, self.wV, self.wO, self.gainlr1, self.biaslr1, self.gainlr2, self.biaslr2, self.w_final]
     
     def _split_head(self, X : Tensor):
         B, L, _ = X.value.shape
@@ -51,8 +54,11 @@ class MiniGPT():
         X_reshaped = X.transpose((0, 2, 1, 3))
         return X_reshaped.reshape((B, L, H * self.dv))
 
-    def __call__(self, X : Tensor):
-        X_c = X + self.PE(X)
+    def __call__(self, indices : Tensor):
+        
+        x_emb = self.wE.lookup(indices)
+        x_pos = self.PE(x_emb)
+        X_c = x_emb + x_pos
 
         Q = X_c @ self.wQ
         K = X_c @ self.wK
@@ -61,13 +67,26 @@ class MiniGPT():
         K_split = self._split_head(K)
         V_split = self._split_head(V)
 
-        heads : Tensor = (Q_split @ K_split.transpose((0, 1, 3, 2)) / np.sqrt(self.dk)).softmax() @ V_split
+        scores = Q_split @ K_split.transpose((0, 1, 3, 2)) / np.sqrt(self.dk)
+
+        B, H, L, _ = scores.value.shape
+        mask = np.triu(np.ones((L, L)), k=1) * -1e9
+        scores.value += mask
+
+        heads = scores.softmax() @ V_split
+        
         attention_output =  self._reshape_head(heads) @ self.wO
         attention_output_R = attention_output + X_c
+        
         norm_layer = attention_output_R.layerNorm(self.gainlr1, self.biaslr1)
         ffn_out = self.FFN(norm_layer)
         ffn_out_R = ffn_out + norm_layer
-        return ffn_out_R.layerNorm(self.gainlr1, self.biaslr2)
+        
+        features = ffn_out_R.layerNorm(self.gainlr2, self.biaslr2)
+        
+        logits = features @ self.w_final 
+        
+        return logits
     
     def FFN(self, X : Tensor):
         relu = ((X @ self.w1) + self.b1).relu()
